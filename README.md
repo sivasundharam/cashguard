@@ -15,7 +15,7 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 ## End-to-End Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 180}}}%%
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
     QBO["QuickBooks\nGoogle Sheets"]
     FT["Fivetran\nConnector"]
@@ -38,7 +38,7 @@ flowchart LR
 ## Agent Pipeline
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 160}}}%%
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
     A["fivetran_sync\nTrigger data pull"]
     B["invoice_monitor\nOpen CollectionsCases"]
@@ -57,7 +57,7 @@ flowchart LR
 Email tone is determined by **relationship score** (0–100) from the client profile and **urgency** from days overdue. Rules applied in order:
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 200}}}%%
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart TD
     START(["New Case"])
 
