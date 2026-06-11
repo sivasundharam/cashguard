@@ -1,6 +1,6 @@
 # CashGuard — AI-Powered SMB Cash Flow & Invoice Collections Agent
 
-> "CashGuard connects your QuickBooks and bank data, predicts cash shortages 60 days out, and automatically collects your overdue invoices — with the right tone, at the right time — before the crisis hits."
+> Connect your financial data, predict cash shortages 60 days out, and automatically collect overdue invoices — with the right tone, at the right time — before the crisis hits.
 
 Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 
@@ -10,141 +10,271 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 
 82% of small businesses that fail cite cash flow problems as the primary cause — not lack of revenue, but the inability to *see* the crisis coming and *act* on it. Existing tools show dashboards. **CashGuard acts.**
 
-## Demo Scenario — Maria's Catering
+---
 
-| | |
+## End-to-End Architecture
+
+```mermaid
+flowchart TD
+    subgraph Data["Data Layer"]
+        QBO[QuickBooks / Google Sheets]
+        FT[Fivetran Connector]
+        MONGO[(MongoDB Atlas)]
+        QBO -->|sync| FT -->|write| MONGO
+    end
+
+    subgraph Pipeline["LangGraph Orchestrator — 6 Agents"]
+        A1[fivetran_sync\nTrigger fresh data pull]
+        A2[invoice_monitor\nScan overdue invoices\nOpen CollectionsCases]
+        A3[relationship_analyzer\nScore client relationship\nSet email tone]
+        A4[cashflow_forecaster\n60-day balance projection\nDetect gap dates]
+        A5[communication_agent\nGemini drafts emails\nper tone + invoice facts]
+        A6[escalation_agent\nPayment plans /\nDemand letters after 3 failures]
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6
+    end
+
+    subgraph Serving["Serving Layer"]
+        API[FastAPI]
+        UI[React Dashboard\nChart.js · Vite]
+        SG[SendGrid\nEmail delivery]
+        API <-->|REST| UI
+        API -->|approve| SG
+    end
+
+    MONGO -->|read| Pipeline
+    Pipeline -->|write state| MONGO
+    MONGO -->|read| API
+```
+
+---
+
+## Agent Pipeline — What Each Agent Does
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Browser)
+    participant API as FastAPI
+    participant LG as LangGraph
+    participant FT as Fivetran
+    participant MDB as MongoDB
+    participant GEM as Gemini
+    participant SG as SendGrid
+
+    C->>API: POST /api/pipeline/run
+    API->>LG: ainvoke(initial_state)
+
+    LG->>FT: trigger_sync(connector_id)
+    FT-->>LG: sync_status
+
+    LG->>MDB: find invoices {status: overdue}
+    MDB-->>LG: overdue invoices
+    LG->>MDB: insert CollectionsCase per invoice
+
+    LG->>MDB: find cases {status: new}
+    LG->>MDB: find client_profiles
+    MDB-->>LG: relationship_score, tone_recommendation
+    LG->>MDB: update case {tone, status: analyzing}
+
+    LG->>MDB: 60-day balance projection
+    LG->>MDB: update gap_linked cases → urgency: critical
+
+    LG->>MDB: find cases {status: analyzing}
+    LG->>GEM: generate_content(tone + invoice facts)
+    GEM-->>LG: email draft
+    LG->>MDB: update case {email_draft, status: draft_ready}
+
+    LG->>MDB: find cases {outreach_attempts >= 3}
+    LG->>GEM: choose action (payment plan / demand letter)
+    GEM-->>LG: escalation recommendation
+    LG->>MDB: update case {status: escalated}
+
+    LG-->>API: final CashGuardState
+    API-->>C: pipeline result JSON
+
+    Note over C,API: Human reviews drafts in UI
+    C->>API: POST /api/approvals/{id}/approve
+    API->>SG: send_email(to, subject, body)
+    SG-->>C: email delivered
+```
+
+---
+
+## Tone Calculation
+
+Email tone is determined by two factors: **relationship score** (0–100) from the client profile, and **urgency** (derived from days overdue). The relationship analyzer applies these rules in order:
+
+```mermaid
+flowchart TD
+    START([Case enters relationship_analyzer])
+    Q1{Score >= 80?}
+    Q2{Urgency == critical?}
+    Q3{Score < 50?}
+    WARM[Tone = warm\nLong-term client,\nassume oversight]
+    FIRM[Tone = firm\nProfessional, direct,\nclear payment request]
+    SERIOUS[Tone = serious\nFinal notice,\nconsequences stated]
+
+    START --> Q1
+    Q1 -->|Yes| Q2
+    Q2 -->|No| WARM
+    Q2 -->|Yes| FIRM
+    Q1 -->|No| Q3
+    Q3 -->|Yes| SERIOUS
+    Q3 -->|No| FIRM
+```
+
+**Urgency** is set by the invoice monitor based on days overdue:
+
+| Days Overdue | Urgency |
 |---|---|
-| Current balance | $12,400 |
-| Payroll due Jun 18 | $8,000 |
-| Rent due Jun 25 | $4,500 |
-| Overdue invoices | $22,000 across 4 clients |
+| 1 – 7 | low |
+| 8 – 14 | medium |
+| 15 – 30 | high |
+| 30+ | **critical** |
 
-**Gap detected:** On June 18, projected balance = $2,400 — insufficient for $8,000 payroll → shortfall $5,600.
+**Gap linking** overrides urgency: if the cash flow forecaster identifies an invoice as needed to close a payroll/rent gap, that case is immediately promoted to `urgency: critical` and `gap_linked: true` — regardless of its age.
 
-CashGuard automatically identifies that collecting from **Acme Corp** ($4,500) and **Bay Area Events** ($3,200) closes the gap, drafts context-aware emails with the correct tone for each relationship, and queues them for one-click approval.
-
----
-
-## Architecture
-
-```
-Fivetran MCP (Google Sheets → MongoDB)
-         ↓
-  LangGraph Orchestrator
-  ├── fivetran_sync      — triggers fresh data sync
-  ├── invoice_monitor    — scans overdue invoices, opens CollectionsCases
-  ├── relationship_analyzer — scores client relationship, sets tone
-  ├── cashflow_forecaster — 60-day projection, detects gap dates
-  ├── communication_agent — Gemini drafts context-aware emails
-  └── escalation_agent   — payment plans / demand letters after 3 failures
-         ↓
-  FastAPI  ←→  React Dashboard
-```
-
-**Stack:** FastAPI · LangGraph · MongoDB Atlas · Gemini (google-generativeai) · SendGrid · Stripe · Fivetran MCP · React · Chart.js
+Gemini then receives the tone as an instruction alongside exact invoice facts (amount, days overdue, client tenure, payment history) and writes a fully-formed email with no placeholders.
 
 ---
 
-## Quick Start
+## Data Model
 
-### 1. Clone & install
+```mermaid
+erDiagram
+    invoices {
+        string invoice_id PK
+        string client_id FK
+        string client_name
+        float amount
+        string status
+        int days_overdue
+        date due_date
+    }
+    client_profiles {
+        string client_id PK
+        string client_name
+        int relationship_score
+        string tone_recommendation
+        int relationship_tenure_months
+        int late_payment_count
+        int total_invoices
+        string contact_email
+    }
+    collections_cases {
+        string case_id PK
+        string invoice_id FK
+        string client_id FK
+        float invoice_amount
+        string status
+        string urgency
+        string tone
+        int outreach_attempts
+        string email_draft
+        bool gap_linked
+        string overdue_bucket
+    }
+    forecast_snapshots {
+        string snapshot_date PK
+        float current_balance
+        array daily_forecast
+        array gap_dates
+        float gap_amount
+        array linked_invoices
+    }
 
-```bash
-git clone https://github.com/<your-username>/cashguard.git
-cd cashguard
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+    invoices ||--|| collections_cases : "triggers"
+    client_profiles ||--o{ collections_cases : "informs tone"
+    invoices ||--o{ forecast_snapshots : "linked_invoices"
 ```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-# Fill in your keys (see .env.example)
-```
-
-### 3. Seed demo data
-
-```bash
-python -m seed.maria_catering
-```
-
-### 4. Start the API
-
-```bash
-uvicorn app.main:app --port 8000 --reload
-```
-
-### 5. Start the dashboard (dev)
-
-```bash
-cd frontend && npm install && npm run dev
-# Open http://localhost:5173
-```
-
-### 6. Run the full agent pipeline
-
-```bash
-curl -X POST http://localhost:8000/api/pipeline/run
-```
-
-Or click **▶ Run Pipeline** in the dashboard.
 
 ---
 
-## API Endpoints
+## Collections Case Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> new : invoice_monitor creates case
+    new --> analyzing : relationship_analyzer sets tone
+    analyzing --> draft_ready : communication_agent generates email
+    draft_ready --> sent : Human approves → SendGrid delivers
+    draft_ready --> rejected : Human rejects draft
+    sent --> escalated : 3+ failed outreach attempts
+    escalated --> sent : Escalation email approved
+```
+
+---
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Agent orchestration | LangGraph 1.2.4 (StateGraph) |
+| API | FastAPI + Uvicorn |
+| Database | MongoDB Atlas (Motor async driver) |
+| LLM | Google Gemini (`gemini-flash-latest`) |
+| Email | SendGrid |
+| Data sync | Fivetran REST API |
+| Frontend | React 18 + Vite 5 + Chart.js 4 |
+| Containerisation | Docker (multi-stage: Node 20 → Python 3.11) |
+| Hosting | Google Cloud Run |
+
+---
+
+## API Reference
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/health` | MongoDB connection check |
-| POST | `/api/pipeline/run` | Run full LangGraph pipeline |
-| GET | `/api/forecast/latest` | Latest 60-day cash forecast |
-| POST | `/api/forecast/run` | Re-run cash flow forecaster |
-| GET | `/api/invoices/overdue` | All overdue invoices |
+| POST | `/api/pipeline/run` | Run full 6-agent LangGraph pipeline |
+| GET | `/api/forecast/latest` | Latest 60-day cash forecast snapshot |
+| POST | `/api/forecast/run` | Re-run cash flow forecaster only |
+| GET | `/api/invoices` | All invoices |
+| GET | `/api/invoices/overdue` | Overdue invoices only |
+| GET | `/api/invoices/{id}` | Single invoice |
 | GET | `/api/cases` | All collections cases |
-| GET | `/api/approvals/pending` | Cases awaiting approval |
-| POST | `/api/approvals/{id}/approve` | Approve & send email via SendGrid |
-| POST | `/api/approvals/{id}/reject` | Skip / reject draft |
+| PATCH | `/api/cases/{id}/status` | Update case status |
+| GET | `/api/approvals/pending` | Cases with drafted emails awaiting approval |
+| POST | `/api/approvals/{id}/approve` | Approve and send email via SendGrid |
+| POST | `/api/approvals/{id}/reject` | Reject draft |
 | GET | `/api/connectors` | List Fivetran connectors |
 | POST | `/api/connectors/{id}/sync` | Trigger Fivetran sync |
 | GET | `/api/connectors/{id}/status` | Check sync status |
 
 ---
 
-## MongoDB Collections
+## Quick Start
 
-| Collection | Purpose |
-|---|---|
-| `invoices` | Raw invoice data synced by Fivetran |
-| `client_profiles` | Relationship scores, tone recommendations |
-| `collections_cases` | One case per overdue invoice, tracks full lifecycle |
-| `forecast_snapshots` | 60-day balance projections with gap flags |
+```bash
+git clone https://github.com/sivasundharam/cashguard.git
+cd cashguard
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # fill in your keys
+python -m seed.maria_catering # seed demo data
+uvicorn app.main:app --port 8000 --reload
+# frontend dev server (separate terminal):
+cd frontend && npm install && npm run dev
+```
 
----
-
-## Fivetran Integration
-
-CashGuard uses Fivetran to sync financial data from QuickBooks (demo: Google Sheets) into MongoDB Atlas before each pipeline run. Set `FIVETRAN_CONNECTOR_ID` in `.env` to enable live sync. Without it, the pipeline runs on pre-seeded demo data.
-
-The `fivetran_sync` node is the first node in the LangGraph graph — it triggers a connector sync so agents always work on fresh data.
+See [DEMO.md](DEMO.md) for the full demo walkthrough.
 
 ---
 
 ## Deploy to Cloud Run
+
+The repo includes a `cloudbuild.yaml`. Connect it to Cloud Run continuous deployment via the GCP Console, or deploy manually:
 
 ```bash
 gcloud builds submit --tag gcr.io/$PROJECT_ID/cashguard
 gcloud run deploy cashguard \
   --image gcr.io/$PROJECT_ID/cashguard \
   --platform managed \
-  --region us-central1 \
+  --region us-east5 \
   --allow-unauthenticated \
   --set-env-vars MONGODB_URI=... \
   --set-env-vars GEMINI_API_KEY=... \
   --set-env-vars SENDGRID_API_KEY=... \
-  --set-env-vars SENDGRID_FROM_EMAIL=... \
-  --set-env-vars FIVETRAN_API_KEY=... \
-  --set-env-vars FIVETRAN_API_SECRET=...
+  --set-env-vars SENDGRID_FROM_EMAIL=...
 ```
 
 ---
