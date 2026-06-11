@@ -15,35 +15,20 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 ## End-to-End Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Data["Data Layer"]
-        QBO["QuickBooks / Google Sheets"]
-        FT["Fivetran Connector"]
-        MONGO[("MongoDB Atlas")]
-        QBO -->|sync| FT -->|write| MONGO
-    end
+flowchart LR
+    QBO["QuickBooks"] -->|sync| FT["Fivetran"] -->|write| DB[("MongoDB")]
 
-    subgraph Pipeline["LangGraph Orchestrator — 6 Agents"]
-        A1["fivetran_sync<br/>Trigger fresh data pull"]
-        A2["invoice_monitor<br/>Scan overdue invoices<br/>Open CollectionsCases"]
-        A3["relationship_analyzer<br/>Score client relationship<br/>Set email tone"]
-        A4["cashflow_forecaster<br/>60-day balance projection<br/>Detect gap dates"]
-        A5["communication_agent<br/>Gemini drafts emails<br/>per tone + invoice facts"]
-        A6["escalation_agent<br/>Payment plans or<br/>Demand letters after 3 failures"]
-        A1 --> A2 --> A3 --> A4 --> A5 --> A6
-    end
+    DB -->|read| N1["fivetran_sync"]
+    N1 --> N2["invoice_monitor"]
+    N2 --> N3["relationship_analyzer"]
+    N3 --> N4["cashflow_forecaster"]
+    N4 --> N5["communication_agent"]
+    N5 --> N6["escalation_agent"]
+    N6 -->|write| DB
 
-    subgraph Serving["Serving Layer"]
-        API["FastAPI"]
-        UI["React Dashboard<br/>Chart.js · Vite"]
-        SG["SendGrid<br/>Email delivery"]
-        API <-->|REST| UI
-        API -->|approve| SG
-    end
-
-    MONGO -->|read| Pipeline
-    Pipeline -->|write| MONGO
-    MONGO -->|read| API
+    DB -->|read| API["FastAPI"]
+    API <-->|REST| UI["React UI"]
+    API -->|send| SG["SendGrid"]
 ```
 
 ---
@@ -105,21 +90,13 @@ Email tone is determined by two factors: **relationship score** (0–100) from t
 
 ```mermaid
 flowchart TD
-    START(["Case enters relationship_analyzer"])
-    Q1{"Score >= 80?"}
-    Q2{"Urgency == critical?"}
-    Q3{"Score < 50?"}
-    WARM["Tone = warm<br/>Long-term client,<br/>assume oversight"]
-    FIRM["Tone = firm<br/>Professional, direct,<br/>clear payment request"]
-    SERIOUS["Tone = serious<br/>Final notice,<br/>consequences stated"]
-
-    START --> Q1
-    Q1 -->|Yes| Q2
-    Q2 -->|No| WARM
-    Q2 -->|Yes| FIRM
-    Q1 -->|No| Q3
-    Q3 -->|Yes| SERIOUS
-    Q3 -->|No| FIRM
+    START(["New Case"]) --> Q1{"Score >= 80?"}
+    Q1 -->|Yes| Q2{"Critical urgency?"}
+    Q1 -->|No| Q3{"Score < 50?"}
+    Q2 -->|No| WARM["warm"]
+    Q2 -->|Yes| FIRM["firm"]
+    Q3 -->|Yes| SERIOUS["serious"]
+    Q3 -->|No| FIRM2["firm"]
 ```
 
 **Urgency** is set by the invoice monitor based on days overdue:
