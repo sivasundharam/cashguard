@@ -31,6 +31,55 @@ Subject: <subject line>
 <email body, max 180 words, signed as Maria Chen>"""
 
 
+def _fallback_draft(inv: dict, profile: dict, case: dict) -> str:
+    tone = case.get("tone", "firm")
+    name = profile["client_name"]
+    amount = inv["amount"]
+    days = inv["days_overdue"]
+    inv_id = inv["invoice_id"]
+
+    if tone == "warm":
+        return f"""Subject: Friendly Reminder – Invoice {inv_id} for ${amount:,.2f}
+
+Dear {name} Team,
+
+I hope you're doing well! I'm reaching out regarding Invoice {inv_id} for ${amount:,.2f}, which is {days} days past due.
+
+Given our great working relationship, I'm sure this is just an oversight. Could you let me know when we can expect payment?
+
+Thank you so much — I truly value our partnership.
+
+Warm regards,
+Maria Chen
+Owner, Maria's Catering"""
+    elif tone == "serious":
+        return f"""Subject: FINAL NOTICE – Invoice {inv_id} for ${amount:,.2f} ({days} Days Overdue)
+
+Dear {name} Accounts Payable,
+
+This is a final notice regarding Invoice {inv_id} for ${amount:,.2f}, now {days} days overdue.
+
+Payment in full is required within 5 business days to avoid escalation to collections and potential suspension of services.
+
+Please remit payment immediately or contact me to discuss resolution.
+
+Regards,
+Maria Chen
+Owner, Maria's Catering"""
+    else:
+        return f"""Subject: Payment Required – Invoice {inv_id} for ${amount:,.2f}
+
+Dear {name} Accounts Payable,
+
+I am writing regarding Invoice {inv_id} for ${amount:,.2f}, which is {days} days overdue.
+
+Please arrange payment at your earliest convenience. If you have any questions, don't hesitate to reach out.
+
+Best regards,
+Maria Chen
+Owner, Maria's Catering"""
+
+
 async def run_communication_agent(
     case_id: str | None = None, auto_send: bool = False
 ) -> List[dict]:
@@ -46,7 +95,12 @@ async def run_communication_agent(
             continue
 
         # Reuse existing draft on approve — only call Gemini if no draft yet
-        draft = case.get("email_draft") or generate_email(_email_prompt(inv, profile, case))
+        try:
+            draft = case.get("email_draft") or generate_email(_email_prompt(inv, profile, case))
+        except Exception as gemini_err:
+            draft = case.get("email_draft") or _fallback_draft(inv, profile, case)
+            import logging
+            logging.getLogger(__name__).warning("Gemini unavailable (%s), using fallback draft", gemini_err)
         new_status = "sent" if auto_send else "draft_ready"
 
         update: dict = {
