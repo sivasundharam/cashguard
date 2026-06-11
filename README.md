@@ -15,22 +15,13 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 ## End-to-End Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
-    QBO["QuickBooks\nGoogle Sheets"]
-    FT["Fivetran\nConnector"]
-    DB[("MongoDB\nAtlas")]
-    PIPE["LangGraph\nOrchestrator\n6 Agents"]
-    API["FastAPI"]
-    UI["React\nDashboard"]
-    SG["SendGrid"]
-
-    QBO -->|sync| FT -->|write| DB
-    DB -->|read| PIPE
+    QBO["QuickBooks"] -->|sync| FT["Fivetran"] -->|write| DB[("MongoDB")]
+    DB -->|read| PIPE["LangGraph Pipeline"]
     PIPE -->|write| DB
-    DB -->|read| API
-    API -->|REST| UI
-    API -->|email| SG
+    DB -->|read| API["FastAPI"]
+    API -->|REST| UI["React UI"]
+    API -->|email| SG["SendGrid"]
 ```
 
 ---
@@ -38,17 +29,18 @@ flowchart LR
 ## Agent Pipeline
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart LR
-    A["fivetran_sync\nTrigger data pull"]
-    B["invoice_monitor\nOpen CollectionsCases"]
-    C["relationship_analyzer\nScore client, set tone"]
-    D["cashflow_forecaster\n60-day projection\nDetect gap dates"]
-    E["communication_agent\nGemini drafts email\nper tone + facts"]
-    F["escalation_agent\nPayment plans after\n3 failed attempts"]
-
-    A --> B --> C --> D --> E --> F
+    A["fivetran_sync"] --> B["invoice_monitor"] --> C["relationship_analyzer"] --> D["cashflow_forecaster"] --> E["communication_agent"] --> F["escalation_agent"]
 ```
+
+| Agent | What it does |
+|---|---|
+| `fivetran_sync` | Triggers Fivetran connector to pull latest QuickBooks data into MongoDB |
+| `invoice_monitor` | Scans overdue invoices, opens a CollectionsCase for each new one |
+| `relationship_analyzer` | Reads client profile score, sets email tone (warm / firm / serious) |
+| `cashflow_forecaster` | Builds 60-day balance projection, flags invoices that close the gap |
+| `communication_agent` | Calls Gemini to draft a tone-aware collection email per case |
+| `escalation_agent` | For cases with 3+ failed attempts, Gemini picks payment plan or demand letter |
 
 ---
 
@@ -57,27 +49,21 @@ flowchart LR
 Email tone is determined by **relationship score** (0–100) from the client profile and **urgency** from days overdue. Rules applied in order:
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart TD
-    START(["New Case"])
-
-    Q1{"Relationship\nScore >= 80?"}
-    Q2{"Urgency ==\ncritical?"}
-    Q3{"Relationship\nScore < 50?"}
-
-    WARM["WARM\nLong-term client,\nassume oversight"]
-    FIRM1["FIRM\nProfessional,\ndirect request"]
-    FIRM2["FIRM\nProfessional,\ndirect request"]
-    SERIOUS["SERIOUS\nFinal notice,\nstate consequences"]
-
-    START --> Q1
-    Q1 -->|Yes| Q2
-    Q1 -->|No| Q3
-    Q2 -->|No - keep warm| WARM
-    Q2 -->|Yes - override| FIRM1
-    Q3 -->|Yes| SERIOUS
-    Q3 -->|No| FIRM2
+    START(["New Case"]) --> Q1{"Score >= 80?"}
+    Q1 -->|Yes| Q2{"Critical urgency?"}
+    Q1 -->|No| Q3{"Score < 50?"}
+    Q2 -->|No| WARM(["WARM"])
+    Q2 -->|Yes| FIRM1(["FIRM"])
+    Q3 -->|Yes| SERIOUS(["SERIOUS"])
+    Q3 -->|No| FIRM2(["FIRM"])
 ```
+
+| Tone | When | Gemini instruction |
+|---|---|---|
+| **warm** | Score ≥ 80, not critical | Friendly — assume oversight, acknowledge long relationship |
+| **firm** | Score 50–79, or score ≥ 80 but critical | Professional and direct — state amount, request prompt payment |
+| **serious** | Score < 50 | Final notice — state consequences if unpaid in 5 business days |
 
 **Urgency** from days overdue:
 
