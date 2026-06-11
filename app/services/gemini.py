@@ -17,7 +17,7 @@ def get_client():
 
 def generate_text(prompt: str) -> str:
     response = get_client().models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         contents=prompt,
     )
     return response.text
