@@ -5,7 +5,7 @@ from app.services.mongodb import invoices_col
 router = APIRouter(prefix="/api/invoices", tags=["invoices"])
 
 
-@router.get("/")
+@router.get("")
 async def list_invoices():
     return await invoices_col().find({}, {"_id": 0}).to_list(None)
 

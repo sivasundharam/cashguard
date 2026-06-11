@@ -7,7 +7,7 @@ from app.services.mongodb import collections_cases_col
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 
-@router.get("/")
+@router.get("")
 async def list_cases():
     return (
         await collections_cases_col()
