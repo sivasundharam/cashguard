@@ -29,7 +29,7 @@ CLIENTS = [
     {
         "client_id": "client_002",
         "client_name": "Sunrise Hotel",
-        "contact_email": "finance@sunrisehotel.com",
+        "contact_email": "sivasundharam123@gmail.com",
         "relationship_tenure_months": 3,
         "total_invoices": 2,
         "late_payment_count": 1,

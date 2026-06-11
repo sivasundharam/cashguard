@@ -45,7 +45,8 @@ async def run_communication_agent(
         if not inv or not profile:
             continue
 
-        draft = generate_email(_email_prompt(inv, profile, case))
+        # Reuse existing draft on approve — only call Gemini if no draft yet
+        draft = case.get("email_draft") or generate_email(_email_prompt(inv, profile, case))
         new_status = "sent" if auto_send else "draft_ready"
 
         update: dict = {
