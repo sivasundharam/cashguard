@@ -11,6 +11,8 @@ async def get_latest_forecast():
     snapshot = await forecast_snapshots_col().find_one(
         {}, {"_id": 0}, sort=[("snapshot_date", -1)]
     )
+    if snapshot:
+        snapshot.pop("created_at", None)
     return snapshot or {}
 
 
