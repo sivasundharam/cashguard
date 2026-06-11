@@ -14,21 +14,23 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 
 ## End-to-End Architecture
 
+**Data flow:**
+
 ```mermaid
 flowchart LR
-    QBO["QuickBooks"] -->|sync| FT["Fivetran"] -->|write| DB[("MongoDB")]
+    A["QuickBooks"] -->|Fivetran sync| B[("MongoDB")]
+    B --> C["6-Agent Pipeline"]
+    C -->|writes results| B
+    B --> D["FastAPI"]
+    D --> E["React UI"]
+    D --> F["SendGrid"]
+```
 
-    DB -->|read| N1["fivetran_sync"]
-    N1 --> N2["invoice_monitor"]
-    N2 --> N3["relationship_analyzer"]
-    N3 --> N4["cashflow_forecaster"]
-    N4 --> N5["communication_agent"]
-    N5 --> N6["escalation_agent"]
-    N6 -->|write| DB
+**Agent sequence inside the pipeline:**
 
-    DB -->|read| API["FastAPI"]
-    API <-->|REST| UI["React UI"]
-    API -->|send| SG["SendGrid"]
+```mermaid
+flowchart LR
+    A["fivetran_sync"] --> B["invoice_monitor"] --> C["relationship_analyzer"] --> D["cashflow_forecaster"] --> E["communication_agent"] --> F["escalation_agent"]
 ```
 
 ---
