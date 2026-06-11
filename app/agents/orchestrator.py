@@ -1,7 +1,10 @@
+import logging
 import os
 import uuid
 from datetime import datetime
 from typing import List, Optional, TypedDict
+
+logger = logging.getLogger(__name__)
 
 from langgraph.graph import END, START, StateGraph
 
@@ -79,6 +82,7 @@ async def _communication_agent_node(state: CashGuardState) -> dict:
     try:
         return {"drafts_created": await run_communication_agent()}
     except Exception as e:
+        logger.error("communication_agent failed: %s", e, exc_info=True)
         return {"errors": state["errors"] + [f"communication_agent: {e}"]}
 
 
