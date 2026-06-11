@@ -14,94 +14,72 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 
 ## End-to-End Architecture
 
-**Data flow:**
-
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 180}}}%%
 flowchart LR
-    A["QuickBooks"] -->|Fivetran sync| B[("MongoDB")]
-    B --> C["6-Agent Pipeline"]
-    C -->|writes results| B
-    B --> D["FastAPI"]
-    D --> E["React UI"]
-    D --> F["SendGrid"]
-```
+    QBO["QuickBooks\nGoogle Sheets"]
+    FT["Fivetran\nConnector"]
+    DB[("MongoDB\nAtlas")]
+    PIPE["LangGraph\nOrchestrator\n6 Agents"]
+    API["FastAPI"]
+    UI["React\nDashboard"]
+    SG["SendGrid"]
 
-**Agent sequence inside the pipeline:**
-
-```mermaid
-flowchart LR
-    A["fivetran_sync"] --> B["invoice_monitor"] --> C["relationship_analyzer"] --> D["cashflow_forecaster"] --> E["communication_agent"] --> F["escalation_agent"]
+    QBO -->|sync| FT -->|write| DB
+    DB -->|read| PIPE
+    PIPE -->|write| DB
+    DB -->|read| API
+    API -->|REST| UI
+    API -->|email| SG
 ```
 
 ---
 
-## Agent Pipeline — What Each Agent Does
+## Agent Pipeline
 
 ```mermaid
-sequenceDiagram
-    participant C as Client (Browser)
-    participant API as FastAPI
-    participant LG as LangGraph
-    participant FT as Fivetran
-    participant MDB as MongoDB
-    participant GEM as Gemini
-    participant SG as SendGrid
+%%{init: {"flowchart": {"wrappingWidth": 160}}}%%
+flowchart LR
+    A["fivetran_sync\nTrigger data pull"]
+    B["invoice_monitor\nOpen CollectionsCases"]
+    C["relationship_analyzer\nScore client, set tone"]
+    D["cashflow_forecaster\n60-day projection\nDetect gap dates"]
+    E["communication_agent\nGemini drafts email\nper tone + facts"]
+    F["escalation_agent\nPayment plans after\n3 failed attempts"]
 
-    C->>API: POST /api/pipeline/run
-    API->>LG: ainvoke(initial_state)
-
-    LG->>FT: trigger_sync(connector_id)
-    FT-->>LG: sync_status
-
-    LG->>MDB: find overdue invoices
-    MDB-->>LG: invoices[]
-    LG->>MDB: insert CollectionsCase per invoice
-
-    LG->>MDB: find cases (status=new)
-    LG->>MDB: find client_profiles
-    MDB-->>LG: score + tone_recommendation
-    LG->>MDB: update case tone + status=analyzing
-
-    LG->>MDB: compute 60-day projection
-    LG->>MDB: mark gap_linked cases critical
-
-    LG->>MDB: find cases (status=analyzing)
-    LG->>GEM: generate email (tone + facts)
-    GEM-->>LG: email draft
-    LG->>MDB: save draft, status=draft_ready
-
-    LG->>MDB: find cases (attempts >= 3)
-    LG->>GEM: choose escalation action
-    GEM-->>LG: recommendation
-    LG->>MDB: update status=escalated
-
-    LG-->>API: final CashGuardState
-    API-->>C: pipeline result JSON
-
-    Note over C,API: Human reviews drafts in UI
-    C->>API: POST /api/approvals/{id}/approve
-    API->>SG: send_email(to, subject, body)
-    SG-->>C: email delivered
+    A --> B --> C --> D --> E --> F
 ```
 
 ---
 
 ## Tone Calculation
 
-Email tone is determined by two factors: **relationship score** (0–100) from the client profile, and **urgency** (derived from days overdue). The relationship analyzer applies these rules in order:
+Email tone is determined by **relationship score** (0–100) from the client profile and **urgency** from days overdue. Rules applied in order:
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 200}}}%%
 flowchart TD
-    START(["New Case"]) --> Q1{"Score >= 80?"}
-    Q1 -->|Yes| Q2{"Critical urgency?"}
-    Q1 -->|No| Q3{"Score < 50?"}
-    Q2 -->|No| WARM["warm"]
-    Q2 -->|Yes| FIRM["firm"]
-    Q3 -->|Yes| SERIOUS["serious"]
-    Q3 -->|No| FIRM2["firm"]
+    START(["New Case"])
+
+    Q1{"Relationship\nScore >= 80?"}
+    Q2{"Urgency ==\ncritical?"}
+    Q3{"Relationship\nScore < 50?"}
+
+    WARM["WARM\nLong-term client,\nassume oversight"]
+    FIRM1["FIRM\nProfessional,\ndirect request"]
+    FIRM2["FIRM\nProfessional,\ndirect request"]
+    SERIOUS["SERIOUS\nFinal notice,\nstate consequences"]
+
+    START --> Q1
+    Q1 -->|Yes| Q2
+    Q1 -->|No| Q3
+    Q2 -->|No - keep warm| WARM
+    Q2 -->|Yes - override| FIRM1
+    Q3 -->|Yes| SERIOUS
+    Q3 -->|No| FIRM2
 ```
 
-**Urgency** is set by the invoice monitor based on days overdue:
+**Urgency** from days overdue:
 
 | Days Overdue | Urgency |
 |---|---|
@@ -110,9 +88,22 @@ flowchart TD
 | 15 – 30 | high |
 | 30+ | **critical** |
 
-**Gap linking** overrides urgency: if the cash flow forecaster identifies an invoice as needed to close a payroll/rent gap, that case is immediately promoted to `urgency: critical` and `gap_linked: true` — regardless of its age.
+**Gap-linked override:** If the cash flow forecaster flags an invoice as needed to close a payroll/rent shortfall, that case is immediately promoted to `critical` regardless of age.
 
-Gemini then receives the tone as an instruction alongside exact invoice facts (amount, days overdue, client tenure, payment history) and writes a fully-formed email with no placeholders.
+---
+
+## Collections Case Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> new : invoice_monitor opens case
+    new --> analyzing : relationship_analyzer sets tone
+    analyzing --> draft_ready : communication_agent writes email
+    draft_ready --> sent : Human approves in dashboard
+    draft_ready --> rejected : Human rejects draft
+    sent --> escalated : 3+ outreach attempts failed
+    escalated --> sent : Escalation email approved
+```
 
 ---
 
@@ -123,62 +114,38 @@ erDiagram
     invoices {
         string invoice_id PK
         string client_id FK
-        string client_name
         float amount
         string status
         int days_overdue
-        date due_date
     }
     client_profiles {
         string client_id PK
-        string client_name
         int relationship_score
         string tone_recommendation
-        int relationship_tenure_months
-        int late_payment_count
-        int total_invoices
+        int tenure_months
         string contact_email
     }
     collections_cases {
         string case_id PK
         string invoice_id FK
         string client_id FK
-        float invoice_amount
         string status
         string urgency
         string tone
-        int outreach_attempts
-        string email_draft
         bool gap_linked
-        string overdue_bucket
+        string email_draft
     }
     forecast_snapshots {
         string snapshot_date PK
         float current_balance
-        array daily_forecast
-        array gap_dates
         float gap_amount
+        array gap_dates
         array linked_invoices
     }
 
     invoices ||--|| collections_cases : "triggers"
-    client_profiles ||--o{ collections_cases : "informs tone"
-    invoices ||--o{ forecast_snapshots : "linked_invoices"
-```
-
----
-
-## Collections Case Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> new : invoice_monitor creates case
-    new --> analyzing : relationship_analyzer sets tone
-    analyzing --> draft_ready : communication_agent generates email
-    draft_ready --> sent : Human approves → SendGrid delivers
-    draft_ready --> rejected : Human rejects draft
-    sent --> escalated : 3+ failed outreach attempts
-    escalated --> sent : Escalation email approved
+    client_profiles ||--o{ collections_cases : "sets tone"
+    invoices ||--o{ forecast_snapshots : "linked"
 ```
 
 ---
