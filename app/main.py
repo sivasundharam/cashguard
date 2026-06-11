@@ -31,11 +31,6 @@ app.include_router(forecast_router)
 app.include_router(approvals_router)
 
 
-@app.get("/")
-async def root():
-    return {"service": "CashGuard", "status": "ok"}
-
-
 @app.get("/api/health")
 async def health():
     from app.services.mongodb import get_db
