@@ -15,13 +15,36 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 ## End-to-End Architecture
 
 ```mermaid
-flowchart LR
-    QBO["QuickBooks"] -->|sync| FT["Fivetran"] -->|write| DB[("MongoDB")]
-    DB -->|read| PIPE["LangGraph Pipeline"]
-    PIPE -->|write| DB
-    DB -->|read| API["FastAPI"]
-    API -->|REST| UI["React UI"]
-    API -->|email| SG["SendGrid"]
+%%{init: {"flowchart": {"wrappingWidth": 1000}}}%%
+flowchart TD
+    subgraph Data["Data Layer"]
+        QBO["QuickBooks / Google Sheets"]
+        FT["Fivetran Connector"]
+        MONGO[("MongoDB Atlas")]
+        QBO -->|sync| FT -->|write| MONGO
+    end
+
+    subgraph Pipeline["LangGraph Orchestrator — 6 Agents"]
+        A1["fivetran_sync<br/>Trigger fresh data pull"]
+        A2["invoice_monitor<br/>Scan overdue invoices<br/>Open CollectionsCases"]
+        A3["relationship_analyzer<br/>Score client relationship<br/>Set email tone"]
+        A4["cashflow_forecaster<br/>60-day balance projection<br/>Detect gap dates"]
+        A5["communication_agent<br/>Gemini drafts emails<br/>per tone + invoice facts"]
+        A6["escalation_agent<br/>Payment plans or<br/>Demand letters after 3 failures"]
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6
+    end
+
+    subgraph Serving["Serving Layer"]
+        API["FastAPI"]
+        UI["React Dashboard<br/>Chart.js · Vite"]
+        SG["SendGrid<br/>Email delivery"]
+        API <-->|REST| UI
+        API -->|approve| SG
+    end
+
+    MONGO -->|read| Pipeline
+    Pipeline -->|write| MONGO
+    MONGO -->|read| API
 ```
 
 ---
@@ -29,18 +52,43 @@ flowchart LR
 ## Agent Pipeline
 
 ```mermaid
-flowchart LR
-    A["fivetran_sync"] --> B["invoice_monitor"] --> C["relationship_analyzer"] --> D["cashflow_forecaster"] --> E["communication_agent"] --> F["escalation_agent"]
-```
+sequenceDiagram
+    participant C as Browser
+    participant API as FastAPI
+    participant LG as LangGraph
+    participant FT as Fivetran
+    participant MDB as MongoDB
+    participant GEM as Gemini
+    participant SG as SendGrid
 
-| Agent | What it does |
-|---|---|
-| `fivetran_sync` | Triggers Fivetran connector to pull latest QuickBooks data into MongoDB |
-| `invoice_monitor` | Scans overdue invoices, opens a CollectionsCase for each new one |
-| `relationship_analyzer` | Reads client profile score, sets email tone (warm / firm / serious) |
-| `cashflow_forecaster` | Builds 60-day balance projection, flags invoices that close the gap |
-| `communication_agent` | Calls Gemini to draft a tone-aware collection email per case |
-| `escalation_agent` | For cases with 3+ failed attempts, Gemini picks payment plan or demand letter |
+    C->>API: POST /api/pipeline/run
+    API->>LG: ainvoke(initial_state)
+    LG->>FT: trigger_sync(connector_id)
+    FT-->>LG: sync_status
+    LG->>MDB: find overdue invoices
+    MDB-->>LG: invoices[]
+    LG->>MDB: insert CollectionsCase per invoice
+    LG->>MDB: find cases (status=new)
+    LG->>MDB: find client_profiles
+    MDB-->>LG: score + tone_recommendation
+    LG->>MDB: update case tone + status=analyzing
+    LG->>MDB: compute 60-day projection
+    LG->>MDB: mark gap_linked cases critical
+    LG->>MDB: find cases (status=analyzing)
+    LG->>GEM: generate email (tone + facts)
+    GEM-->>LG: email draft
+    LG->>MDB: save draft, status=draft_ready
+    LG->>MDB: find cases (attempts >= 3)
+    LG->>GEM: choose escalation action
+    GEM-->>LG: recommendation
+    LG->>MDB: update status=escalated
+    LG-->>API: final CashGuardState
+    API-->>C: pipeline result JSON
+    Note over C,API: Human reviews drafts in UI
+    C->>API: POST /api/approvals/id/approve
+    API->>SG: send_email(to, subject, body)
+    SG-->>C: email delivered
+```
 
 ---
 
@@ -49,21 +97,24 @@ flowchart LR
 Email tone is determined by **relationship score** (0–100) from the client profile and **urgency** from days overdue. Rules applied in order:
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 1000}}}%%
 flowchart TD
-    START(["New Case"]) --> Q1{"Score >= 80?"}
-    Q1 -->|Yes| Q2{"Critical urgency?"}
-    Q1 -->|No| Q3{"Score < 50?"}
-    Q2 -->|No| WARM(["WARM"])
-    Q2 -->|Yes| FIRM1(["FIRM"])
-    Q3 -->|Yes| SERIOUS(["SERIOUS"])
-    Q3 -->|No| FIRM2(["FIRM"])
-```
+    START(["Case enters relationship_analyzer"])
+    Q1{"Score >= 80?"}
+    Q2{"Urgency == critical?"}
+    Q3{"Score < 50?"}
+    WARM["Tone = warm<br/>Long-term client,<br/>assume oversight"]
+    FIRM["Tone = firm<br/>Professional, direct,<br/>clear payment request"]
+    SERIOUS["Tone = serious<br/>Final notice,<br/>consequences stated"]
 
-| Tone | When | Gemini instruction |
-|---|---|---|
-| **warm** | Score ≥ 80, not critical | Friendly — assume oversight, acknowledge long relationship |
-| **firm** | Score 50–79, or score ≥ 80 but critical | Professional and direct — state amount, request prompt payment |
-| **serious** | Score < 50 | Final notice — state consequences if unpaid in 5 business days |
+    START --> Q1
+    Q1 -->|Yes| Q2
+    Q2 -->|No| WARM
+    Q2 -->|Yes| FIRM
+    Q1 -->|No| Q3
+    Q3 -->|Yes| SERIOUS
+    Q3 -->|No| FIRM
+```
 
 **Urgency** from days overdue:
 
