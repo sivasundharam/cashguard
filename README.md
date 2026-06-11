@@ -17,32 +17,32 @@ Built for the **Google Cloud Rapid Agent Hackathon** · **Fivetran Track**
 ```mermaid
 flowchart TD
     subgraph Data["Data Layer"]
-        QBO[QuickBooks / Google Sheets]
-        FT[Fivetran Connector]
-        MONGO[(MongoDB Atlas)]
+        QBO["QuickBooks / Google Sheets"]
+        FT["Fivetran Connector"]
+        MONGO[("MongoDB Atlas")]
         QBO -->|sync| FT -->|write| MONGO
     end
 
     subgraph Pipeline["LangGraph Orchestrator — 6 Agents"]
-        A1[fivetran_sync\nTrigger fresh data pull]
-        A2[invoice_monitor\nScan overdue invoices\nOpen CollectionsCases]
-        A3[relationship_analyzer\nScore client relationship\nSet email tone]
-        A4[cashflow_forecaster\n60-day balance projection\nDetect gap dates]
-        A5[communication_agent\nGemini drafts emails\nper tone + invoice facts]
-        A6[escalation_agent\nPayment plans /\nDemand letters after 3 failures]
+        A1["fivetran_sync<br/>Trigger fresh data pull"]
+        A2["invoice_monitor<br/>Scan overdue invoices<br/>Open CollectionsCases"]
+        A3["relationship_analyzer<br/>Score client relationship<br/>Set email tone"]
+        A4["cashflow_forecaster<br/>60-day balance projection<br/>Detect gap dates"]
+        A5["communication_agent<br/>Gemini drafts emails<br/>per tone + invoice facts"]
+        A6["escalation_agent<br/>Payment plans or<br/>Demand letters after 3 failures"]
         A1 --> A2 --> A3 --> A4 --> A5 --> A6
     end
 
     subgraph Serving["Serving Layer"]
-        API[FastAPI]
-        UI[React Dashboard\nChart.js · Vite]
-        SG[SendGrid\nEmail delivery]
+        API["FastAPI"]
+        UI["React Dashboard<br/>Chart.js · Vite"]
+        SG["SendGrid<br/>Email delivery"]
         API <-->|REST| UI
         API -->|approve| SG
     end
 
     MONGO -->|read| Pipeline
-    Pipeline -->|write state| MONGO
+    Pipeline -->|write| MONGO
     MONGO -->|read| API
 ```
 
@@ -66,27 +66,27 @@ sequenceDiagram
     LG->>FT: trigger_sync(connector_id)
     FT-->>LG: sync_status
 
-    LG->>MDB: find invoices {status: overdue}
-    MDB-->>LG: overdue invoices
+    LG->>MDB: find overdue invoices
+    MDB-->>LG: invoices[]
     LG->>MDB: insert CollectionsCase per invoice
 
-    LG->>MDB: find cases {status: new}
+    LG->>MDB: find cases (status=new)
     LG->>MDB: find client_profiles
-    MDB-->>LG: relationship_score, tone_recommendation
-    LG->>MDB: update case {tone, status: analyzing}
+    MDB-->>LG: score + tone_recommendation
+    LG->>MDB: update case tone + status=analyzing
 
-    LG->>MDB: 60-day balance projection
-    LG->>MDB: update gap_linked cases → urgency: critical
+    LG->>MDB: compute 60-day projection
+    LG->>MDB: mark gap_linked cases critical
 
-    LG->>MDB: find cases {status: analyzing}
-    LG->>GEM: generate_content(tone + invoice facts)
+    LG->>MDB: find cases (status=analyzing)
+    LG->>GEM: generate email (tone + facts)
     GEM-->>LG: email draft
-    LG->>MDB: update case {email_draft, status: draft_ready}
+    LG->>MDB: save draft, status=draft_ready
 
-    LG->>MDB: find cases {outreach_attempts >= 3}
-    LG->>GEM: choose action (payment plan / demand letter)
-    GEM-->>LG: escalation recommendation
-    LG->>MDB: update case {status: escalated}
+    LG->>MDB: find cases (attempts >= 3)
+    LG->>GEM: choose escalation action
+    GEM-->>LG: recommendation
+    LG->>MDB: update status=escalated
 
     LG-->>API: final CashGuardState
     API-->>C: pipeline result JSON
@@ -105,13 +105,13 @@ Email tone is determined by two factors: **relationship score** (0–100) from t
 
 ```mermaid
 flowchart TD
-    START([Case enters relationship_analyzer])
-    Q1{Score >= 80?}
-    Q2{Urgency == critical?}
-    Q3{Score < 50?}
-    WARM[Tone = warm\nLong-term client,\nassume oversight]
-    FIRM[Tone = firm\nProfessional, direct,\nclear payment request]
-    SERIOUS[Tone = serious\nFinal notice,\nconsequences stated]
+    START(["Case enters relationship_analyzer"])
+    Q1{"Score >= 80?"}
+    Q2{"Urgency == critical?"}
+    Q3{"Score < 50?"}
+    WARM["Tone = warm<br/>Long-term client,<br/>assume oversight"]
+    FIRM["Tone = firm<br/>Professional, direct,<br/>clear payment request"]
+    SERIOUS["Tone = serious<br/>Final notice,<br/>consequences stated"]
 
     START --> Q1
     Q1 -->|Yes| Q2
